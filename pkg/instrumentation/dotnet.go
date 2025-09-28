@@ -64,6 +64,11 @@ func injectDotNetSDK(dotNetSpec v1alpha1.DotNet, pod corev1.Pod, index int, runt
 		return pod, err
 	}
 
+	// Check if ADOT SDK should be injected based on existing environment variables
+	if !shouldInjectADOTSDK(container.Env) {
+		return pod, nil
+	}
+
 	// check if OTEL_DOTNET_AUTO_HOME env var is already set in the container
 	// if it is already set, then we assume that .NET Auto-instrumentation is already configured for this container
 	if getIndexOfEnv(container.Env, envDotNetOTelAutoHome) > -1 {
