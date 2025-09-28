@@ -25,60 +25,23 @@ var (
 )
 
 func injectJavaagent(javaSpec v1alpha1.Java, pod corev1.Pod, index int) (corev1.Pod, error) {
-	logger := log.Log.WithName("javaagent-injection")
-	logger.Info("injectJavaagent triggered",
-		"pod", pod.Name,
-		"namespace", pod.Namespace,
-		"container", pod.Spec.Containers[index].Name,
-		"containerIndex", index)
-
 	// caller checks if there is at least one container.
 	container := &pod.Spec.Containers[index]
 
-	// Add test environment variable to indicate new operator auto-monitor functionality
-	container.Env = append(container.Env, corev1.EnvVar{
-		Name:  "NEW_OPERATOR",
-		Value: "AUTOMONITOR",
-	})
-	logger.Info("added test environment variable NEW_OPERATOR=AUTOMONITOR",
-		"pod", pod.Name,
-		"container", pod.Spec.Containers[index].Name)
-
 	err := validateContainerEnv(container.Env, envJavaToolsOptions)
 	if err != nil {
-		logger.Error(err, "container environment validation failed")
 		return pod, err
 	}
 
 	// Check if ADOT SDK should be injected based on existing environment variables
 	if !shouldInjectADOTSDK(container.Env) {
-		logger.Info("ADOT SDK injection skipped due to existing environment variables",
-			"pod", pod.Name,
-			"container", pod.Spec.Containers[index].Name)
 		return pod, nil
 	}
 
-	logger.Info("proceeding with Java agent injection",
-		"pod", pod.Name,
-		"container", pod.Spec.Containers[index].Name)
-
 	// inject Java instrumentation spec env vars with validation.
 	for _, env := range javaSpec.Env {
-		logger.Info("processing Java spec environment variable",
-			"name", env.Name,
-			"value", env.Value,
-			"pod", pod.Name,
-			"container", pod.Spec.Containers[index].Name)
 		if shouldInjectEnvVar(container.Env, env.Name, env.Value) {
 			container.Env = append(container.Env, env)
-			logger.Info("injected Java spec environment variable",
-				"name", env.Name,
-				"value", env.Value)
-		} else {
-			logger.Info("skipped Java spec environment variable injection",
-				"name", env.Name,
-				"value", env.Value,
-				"reason", "validation failed or already exists")
 		}
 	}
 
@@ -123,11 +86,6 @@ func injectJavaagent(javaSpec v1alpha1.Java, pod corev1.Pod, index int) (corev1.
 			}},
 		})
 	}
-
-	logger.Info("Java agent injection completed successfully",
-		"pod", pod.Name,
-		"container", pod.Spec.Containers[index].Name,
-		"initContainerAdded", !isInitContainerMissing(pod, javaInitContainerName))
 
 	return pod, err
 }

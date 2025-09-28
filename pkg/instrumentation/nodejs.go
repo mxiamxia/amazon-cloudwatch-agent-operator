@@ -26,10 +26,9 @@ func injectNodeJSSDK(nodeJSSpec v1alpha1.NodeJS, pod corev1.Pod, index int) (cor
 		return pod, err
 	}
 
-	// inject NodeJS instrumentation spec env vars.
+	// inject NodeJS instrumentation spec env vars with validation.
 	for _, env := range nodeJSSpec.Env {
-		idx := getIndexOfEnv(container.Env, env.Name)
-		if idx == -1 {
+		if shouldInjectEnvVar(container.Env, env.Name, env.Value) {
 			container.Env = append(container.Env, env)
 		}
 	}
