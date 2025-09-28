@@ -16,6 +16,13 @@ import (
 	"github.com/aws/amazon-cloudwatch-agent-operator/pkg/constants"
 )
 
+const (
+	// CloudWatch agent service endpoints
+	cloudwatchAgentStandardEndpoint = "cloudwatch-agent.amazon-cloudwatch"
+	cloudwatchAgentWindowsEndpoint  = "cloudwatch-agent-windows-headless.amazon-cloudwatch.svc.cluster.local"
+	cloudwatchAgentPort             = "4316"
+)
+
 var defaultSize = resource.MustParse("200Mi")
 
 // Calculate if we already inject InitContainers.
@@ -121,4 +128,162 @@ func volumeSize(quantity *resource.Quantity) *resource.Quantity {
 		return &defaultSize
 	}
 	return quantity
+}
+
+// containsCloudWatchAgent checks if the endpoint contains CloudWatch agent service endpoints
+func containsCloudWatchAgent(endpoint string) bool {
+	// Check for standard CloudWatch agent endpoint with port 4316
+	standardEndpoint := cloudwatchAgentStandardEndpoint + ":" + cloudwatchAgentPort
+	// Check for Windows headless service endpoint with port 4316
+	windowsEndpoint := cloudwatchAgentWindowsEndpoint + ":" + cloudwatchAgentPort
+
+	return strings.Contains(endpoint, standardEndpoint) || strings.Contains(endpoint, windowsEndpoint)
+}
+
+// getEnvValue returns the value of an environment variable from the container's env list
+func getEnvValue(envs []corev1.EnvVar, name string) string {
+	for _, env := range envs {
+		if env.Name == name {
+			return env.Value
+		}
+	}
+	return ""
+}
+
+// isApplicationSignalsExplicitlyEnabled checks if OTEL_AWS_APPLICATION_SIGNALS_ENABLED is explicitly set to true
+func isApplicationSignalsExplicitlyEnabled(envs []corev1.EnvVar) bool {
+	value := getEnvValue(envs, "OTEL_AWS_APPLICATION_SIGNALS_ENABLED")
+	return strings.EqualFold(value, "true")
+}
+
+// isApplicationSignalsExplicitlyDisabled checks if OTEL_AWS_APPLICATION_SIGNALS_ENABLED is explicitly set to false or not set at all
+func isApplicationSignalsExplicitlyDisabled(envs []corev1.EnvVar) bool {
+	value := getEnvValue(envs, "OTEL_AWS_APPLICATION_SIGNALS_ENABLED")
+	// Consider it disabled if explicitly set to "false" or not set at all (empty string)
+	return strings.EqualFold(value, "false") || value == ""
+}
+
+// shouldInjectADOTSDK determines if the ADOT SDK should be injected based on existing environment variables
+func shouldInjectADOTSDK(envs []corev1.EnvVar) bool {
+	// Check OTEL_EXPORTER_OTLP_ENDPOINT
+	otlpEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_ENDPOINT")
+	if otlpEndpoint != "" && !containsCloudWatchAgent(otlpEndpoint) {
+		// If Application Signals is explicitly disabled, don't inject
+		if isApplicationSignalsExplicitlyDisabled(envs) {
+			return false
+		}
+	}
+
+	// Check OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+	tracesEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+	if tracesEndpoint != "" && !containsCloudWatchAgent(tracesEndpoint) {
+		// If Application Signals is explicitly disabled, don't inject
+		if isApplicationSignalsExplicitlyDisabled(envs) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// shouldDisableMetrics determines if metrics should be disabled (OTEL_METRICS_EXPORTER=none)
+func shouldDisableMetrics(envs []corev1.EnvVar) bool {
+	// Check if OTEL_EXPORTER_OTLP_ENDPOINT is set and doesn't contain cloudwatch-agent
+	otlpEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_ENDPOINT")
+	if otlpEndpoint != "" && !containsCloudWatchAgent(otlpEndpoint) {
+		// If Application Signals is explicitly enabled, don't disable metrics
+		if isApplicationSignalsExplicitlyEnabled(envs) {
+			return false
+		}
+	}
+
+	// Check if OTEL_EXPORTER_OTLP_METRICS_ENDPOINT is set
+	metricsEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+	if metricsEndpoint != "" {
+		return false
+	}
+
+	// Default behavior is to disable metrics for Application Signals
+	return true
+}
+
+// shouldDisableLogs determines if logs should be disabled (OTEL_LOGS_EXPORTER=none)
+func shouldDisableLogs(envs []corev1.EnvVar) bool {
+	// Check if OTEL_EXPORTER_OTLP_ENDPOINT is set and doesn't contain cloudwatch-agent
+	otlpEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_ENDPOINT")
+	if otlpEndpoint != "" && !containsCloudWatchAgent(otlpEndpoint) {
+		// If Application Signals is explicitly enabled, don't disable logs
+		if isApplicationSignalsExplicitlyEnabled(envs) {
+			return false
+		}
+	}
+
+	// Check if OTEL_EXPORTER_OTLP_LOGS_ENDPOINT is set
+	logsEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
+	if logsEndpoint != "" {
+		return false
+	}
+
+	// Default behavior is to disable logs for Application Signals
+	return true
+}
+
+// shouldOverrideTracesEndpoint determines if the traces endpoint should be overridden
+func shouldOverrideTracesEndpoint(envs []corev1.EnvVar) bool {
+	// Check if OTEL_EXPORTER_OTLP_ENDPOINT is set and doesn't contain cloudwatch-agent
+	otlpEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_ENDPOINT")
+	if otlpEndpoint != "" && !containsCloudWatchAgent(otlpEndpoint) {
+		// If Application Signals is explicitly enabled, don't override traces endpoint
+		if isApplicationSignalsExplicitlyEnabled(envs) {
+			return false
+		}
+	}
+
+	// Check if OTEL_EXPORTER_OTLP_TRACES_ENDPOINT is already set
+	tracesEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+	if tracesEndpoint != "" {
+		return false
+	}
+
+	// Default behavior is to override traces endpoint for Application Signals
+	return true
+}
+
+// shouldInjectEnvVar determines whether a specific environment variable should be injected
+// based on its name and the existing environment variables in the container
+func shouldInjectEnvVar(envs []corev1.EnvVar, envName, envValue string) bool {
+	// If the environment variable is already set, don't override it
+	if getEnvValue(envs, envName) != "" {
+		return false
+	}
+
+	// Apply specific validation rules based on the environment variable name
+	switch envName {
+	case "OTEL_METRICS_EXPORTER":
+		if envValue == "none" {
+			return shouldDisableMetrics(envs)
+		} else if envValue == "otlp" {
+			// For Python default case: only set to "otlp" if metrics should not be disabled
+			return !shouldDisableMetrics(envs)
+		}
+	case "OTEL_LOGS_EXPORTER":
+		if envValue == "none" {
+			return shouldDisableLogs(envs)
+		}
+	case "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT":
+		return shouldOverrideTracesEndpoint(envs)
+	case "OTEL_TRACES_EXPORTER":
+		// Only set to "none" if no custom traces endpoint is configured
+		return getEnvValue(envs, "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") == ""
+
+	// For all other OTEL_ environment variables, apply general validation
+	default:
+		if strings.HasPrefix(envName, "OTEL_") {
+			// Don't override any explicitly set OTEL_ environment variables
+			return getEnvValue(envs, envName) == ""
+		}
+	}
+
+	// For non-OTEL environment variables, always inject if not already set
+	return true
 }

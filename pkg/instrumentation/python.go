@@ -33,10 +33,14 @@ func injectPythonSDK(pythonSpec v1alpha1.Python, pod corev1.Pod, index int) (cor
 		return pod, err
 	}
 
-	// inject Python instrumentation spec env vars.
+	// Check if ADOT SDK should be injected based on existing environment variables
+	if !shouldInjectADOTSDK(container.Env) {
+		return pod, nil
+	}
+
+	// inject Python instrumentation spec env vars with validation.
 	for _, env := range pythonSpec.Env {
-		idx := getIndexOfEnv(container.Env, env.Name)
-		if idx == -1 {
+		if shouldInjectEnvVar(container.Env, env.Name, env.Value) {
 			container.Env = append(container.Env, env)
 		}
 	}
@@ -51,36 +55,32 @@ func injectPythonSDK(pythonSpec v1alpha1.Python, pod corev1.Pod, index int) (cor
 		container.Env[idx].Value = fmt.Sprintf("%s:%s:%s", pythonPathPrefix, container.Env[idx].Value, pythonPathSuffix)
 	}
 
-	// Set OTEL_TRACES_EXPORTER to HTTP exporter if not set by user because it is what our autoinstrumentation supports.
-	idx = getIndexOfEnv(container.Env, envOtelTracesExporter)
-	if idx == -1 {
+	// Set OTEL_TRACES_EXPORTER to otlp exporter if not set by user and validation allows.
+	if shouldInjectEnvVar(container.Env, envOtelTracesExporter, "otlp") {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  envOtelTracesExporter,
 			Value: "otlp",
 		})
 	}
 
-	// Set OTEL_EXPORTER_OTLP_TRACES_PROTOCOL to http/protobuf if not set by user because it is what our autoinstrumentation supports.
-	idx = getIndexOfEnv(container.Env, envOtelExporterOTLPTracesProtocol)
-	if idx == -1 {
+	// Set OTEL_EXPORTER_OTLP_TRACES_PROTOCOL to http/protobuf if not set by user and validation allows.
+	if shouldInjectEnvVar(container.Env, envOtelExporterOTLPTracesProtocol, "http/protobuf") {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  envOtelExporterOTLPTracesProtocol,
 			Value: "http/protobuf",
 		})
 	}
 
-	// Set OTEL_METRICS_EXPORTER to HTTP exporter if not set by user because it is what our autoinstrumentation supports.
-	idx = getIndexOfEnv(container.Env, envOtelMetricsExporter)
-	if idx == -1 {
+	// Set OTEL_METRICS_EXPORTER to otlp exporter if not set by user and validation allows.
+	if shouldInjectEnvVar(container.Env, envOtelMetricsExporter, "otlp") {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  envOtelMetricsExporter,
 			Value: "otlp",
 		})
 	}
 
-	// Set OTEL_EXPORTER_OTLP_METRICS_PROTOCOL to http/protobuf if not set by user because it is what our autoinstrumentation supports.
-	idx = getIndexOfEnv(container.Env, envOtelExporterOTLPMetricsProtocol)
-	if idx == -1 {
+	// Set OTEL_EXPORTER_OTLP_METRICS_PROTOCOL to http/protobuf if not set by user and validation allows.
+	if shouldInjectEnvVar(container.Env, envOtelExporterOTLPMetricsProtocol, "http/protobuf") {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  envOtelExporterOTLPMetricsProtocol,
 			Value: "http/protobuf",
