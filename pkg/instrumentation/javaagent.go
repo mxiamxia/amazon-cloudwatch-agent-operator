@@ -5,7 +5,6 @@ package instrumentation
 
 import (
 	corev1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/aws/amazon-cloudwatch-agent-operator/apis/v1alpha1"
 )
