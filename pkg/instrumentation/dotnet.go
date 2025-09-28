@@ -64,6 +64,11 @@ func injectDotNetSDK(dotNetSpec v1alpha1.DotNet, pod corev1.Pod, index int, runt
 		return pod, err
 	}
 
+	// Check if ADOT SDK should be injected based on existing environment variables
+	if !shouldInjectADOTSDK(container.Env) {
+		return pod, nil
+	}
+
 	// check if OTEL_DOTNET_AUTO_HOME env var is already set in the container
 	// if it is already set, then we assume that .NET Auto-instrumentation is already configured for this container
 	if getIndexOfEnv(container.Env, envDotNetOTelAutoHome) > -1 {
@@ -86,10 +91,9 @@ func injectDotNetSDK(dotNetSpec v1alpha1.DotNet, pod corev1.Pod, index int, runt
 		return pod, fmt.Errorf("provided instrumentation.opentelemetry.io/dotnet-runtime annotation value '%s' is not supported", runtime)
 	}
 
-	// inject .NET instrumentation spec env vars.
+	// inject .NET instrumentation spec env vars with validation.
 	for _, env := range dotNetSpec.Env {
-		idx := getIndexOfEnv(container.Env, env.Name)
-		if idx == -1 {
+		if shouldInjectEnvVar(container.Env, env.Name, env.Value) {
 			container.Env = append(container.Env, env)
 		}
 	}
