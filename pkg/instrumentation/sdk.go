@@ -45,6 +45,24 @@ func (i *sdkInjector) inject(ctx context.Context, insts languageInstrumentations
 		return pod
 	}
 
+	// Pre-resolve all ConfigMaps/Secrets from envFrom for all containers
+	// Uses caches to avoid redundant API calls when multiple containers reference the same ConfigMap/Secret
+	configMapCache := make(map[string]*corev1.ConfigMap)
+	secretCache := make(map[string]*corev1.Secret)
+	containerEnvCache := make(map[int][]corev1.EnvVar)
+
+	for idx := range pod.Spec.Containers {
+		container := &pod.Spec.Containers[idx]
+		// Always call getAllEnvVars for consistency, regardless of envFrom presence
+		allEnvs := getAllEnvVars(ctx, i.client, container, pod.Namespace, i.logger, configMapCache, secretCache)
+		containerEnvCache[idx] = allEnvs
+		i.logger.V(1).Info("cached resolved environment variables for container",
+			"containerIndex", idx,
+			"containerName", container.Name,
+			"directEnvCount", len(container.Env),
+			"totalEnvCount", len(allEnvs))
+	}
+
 	if insts.Java.Instrumentation != nil {
 		otelinst := *insts.Java.Instrumentation
 		var err error
@@ -54,7 +72,13 @@ func (i *sdkInjector) inject(ctx context.Context, insts languageInstrumentations
 
 		for _, container := range strings.Split(javaContainers, ",") {
 			index := getContainerIndex(container, pod)
-			pod, err = injectJavaagent(otelinst.Spec.Java, pod, index)
+			// Pass cached environment variables to avoid re-fetching ConfigMap
+			envs, exists := containerEnvCache[index]
+			if !exists {
+				i.logger.Error(fmt.Errorf("container index %d not found in cache", index), "missing container in cache")
+				continue
+			}
+			pod, err = injectJavaagent(otelinst.Spec.Java, pod, index, envs)
 			if err != nil {
 				i.logger.Info("Skipping javaagent injection", "reason", err.Error(), "container", pod.Spec.Containers[index].Name)
 			} else {
@@ -75,7 +99,13 @@ func (i *sdkInjector) inject(ctx context.Context, insts languageInstrumentations
 
 		for _, container := range strings.Split(nodejsContainers, ",") {
 			index := getContainerIndex(container, pod)
-			pod, err = injectNodeJSSDK(otelinst.Spec.NodeJS, pod, index)
+			// Pass cached environment variables to avoid re-fetching ConfigMap
+			envs, exists := containerEnvCache[index]
+			if !exists {
+				i.logger.Error(fmt.Errorf("container index %d not found in cache", index), "missing container in cache")
+				continue
+			}
+			pod, err = injectNodeJSSDK(otelinst.Spec.NodeJS, pod, index, envs)
 			if err != nil {
 				i.logger.Info("Skipping NodeJS SDK injection", "reason", err.Error(), "container", pod.Spec.Containers[index].Name)
 			} else {
@@ -94,7 +124,13 @@ func (i *sdkInjector) inject(ctx context.Context, insts languageInstrumentations
 
 		for _, container := range strings.Split(pythonContainers, ",") {
 			index := getContainerIndex(container, pod)
-			pod, err = injectPythonSDK(otelinst.Spec.Python, pod, index)
+			// Pass cached environment variables to avoid re-fetching ConfigMap
+			envs, exists := containerEnvCache[index]
+			if !exists {
+				i.logger.Error(fmt.Errorf("container index %d not found in cache", index), "missing container in cache")
+				continue
+			}
+			pod, err = injectPythonSDK(otelinst.Spec.Python, pod, index, envs)
 			if err != nil {
 				i.logger.Info("Skipping Python SDK injection", "reason", err.Error(), "container", pod.Spec.Containers[index].Name)
 			} else {
@@ -113,7 +149,13 @@ func (i *sdkInjector) inject(ctx context.Context, insts languageInstrumentations
 
 		for _, container := range strings.Split(dotnetContainers, ",") {
 			index := getContainerIndex(container, pod)
-			pod, err = injectDotNetSDK(otelinst.Spec.DotNet, pod, index, insts.DotNet.AdditionalAnnotations[annotationDotNetRuntime])
+			// Pass cached environment variables to avoid re-fetching ConfigMap
+			envs, exists := containerEnvCache[index]
+			if !exists {
+				i.logger.Error(fmt.Errorf("container index %d not found in cache", index), "missing container in cache")
+				continue
+			}
+			pod, err = injectDotNetSDK(otelinst.Spec.DotNet, pod, index, insts.DotNet.AdditionalAnnotations[annotationDotNetRuntime], envs)
 			if err != nil {
 				i.logger.Info("Skipping DotNet SDK injection", "reason", err.Error(), "container", pod.Spec.Containers[index].Name)
 			} else {

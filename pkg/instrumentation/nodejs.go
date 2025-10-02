@@ -17,8 +17,7 @@ const (
 	nodejsInstrMountPath    = "/otel-auto-instrumentation-nodejs"
 )
 
-func injectNodeJSSDK(nodeJSSpec v1alpha1.NodeJS, pod corev1.Pod, index int) (corev1.Pod, error) {
-	// caller checks if there is at least one container.
+func injectNodeJSSDK(nodeJSSpec v1alpha1.NodeJS, pod corev1.Pod, index int, allEnvs []corev1.EnvVar) (corev1.Pod, error) {
 	container := &pod.Spec.Containers[index]
 
 	err := validateContainerEnv(container.Env, envNodeOptions)
@@ -26,14 +25,14 @@ func injectNodeJSSDK(nodeJSSpec v1alpha1.NodeJS, pod corev1.Pod, index int) (cor
 		return pod, err
 	}
 
-	// Check if ADOT SDK should be injected based on existing environment variables
-	if !shouldInjectADOTSDK(container.Env) {
+	// Check if ADOT SDK should be injected based on all environment variables and security context
+	if !shouldInjectADOTSDK(allEnvs, pod, container) {
 		return pod, nil
 	}
 
-	// inject NodeJS instrumentation spec env vars with validation.
+	// inject NodeJS instrumentation spec env vars with validation
 	for _, env := range nodeJSSpec.Env {
-		if shouldInjectEnvVar(container.Env, env.Name, env.Value) {
+		if shouldInjectEnvVar(allEnvs, env.Name, env.Value) {
 			container.Env = append(container.Env, env)
 		}
 	}
@@ -68,6 +67,7 @@ func injectNodeJSSDK(nodeJSSpec v1alpha1.NodeJS, pod corev1.Pod, index int) (cor
 			Image:     nodeJSSpec.Image,
 			Command:   []string{"cp", "-a", "/autoinstrumentation/.", nodejsInstrMountPath},
 			Resources: nodeJSSpec.Resources,
+			// SecurityContext: setInitContainerSecurityContext(pod),
 			VolumeMounts: []corev1.VolumeMount{{
 				Name:      nodejsVolumeName,
 				MountPath: nodejsInstrMountPath,

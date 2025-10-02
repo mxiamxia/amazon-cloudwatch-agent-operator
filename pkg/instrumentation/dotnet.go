@@ -54,9 +54,7 @@ var (
 	dotNetCommandWindows = []string{"CMD", "/c", "xcopy", "/e", "autoinstrumentation\\*", dotnetInstrMountPathWindows}
 )
 
-func injectDotNetSDK(dotNetSpec v1alpha1.DotNet, pod corev1.Pod, index int, runtime string) (corev1.Pod, error) {
-
-	// caller checks if there is at least one container.
+func injectDotNetSDK(dotNetSpec v1alpha1.DotNet, pod corev1.Pod, index int, runtime string, allEnvs []corev1.EnvVar) (corev1.Pod, error) {
 	container := &pod.Spec.Containers[index]
 
 	err := validateContainerEnv(container.Env, envDotNetStartupHook, envDotNetAdditionalDeps, envDotNetSharedStore)
@@ -64,14 +62,14 @@ func injectDotNetSDK(dotNetSpec v1alpha1.DotNet, pod corev1.Pod, index int, runt
 		return pod, err
 	}
 
-	// Check if ADOT SDK should be injected based on existing environment variables
-	if !shouldInjectADOTSDK(container.Env) {
+	// Check if ADOT SDK should be injected based on all environment variables and security context
+	if !shouldInjectADOTSDK(allEnvs, pod, container) {
 		return pod, nil
 	}
 
-	// check if OTEL_DOTNET_AUTO_HOME env var is already set in the container
+	// check if OTEL_DOTNET_AUTO_HOME env var is already set
 	// if it is already set, then we assume that .NET Auto-instrumentation is already configured for this container
-	if getIndexOfEnv(container.Env, envDotNetOTelAutoHome) > -1 {
+	if getIndexOfEnv(allEnvs, envDotNetOTelAutoHome) > -1 {
 		return pod, errors.New("OTEL_DOTNET_AUTO_HOME environment variable is already set in the container")
 	}
 
@@ -91,9 +89,9 @@ func injectDotNetSDK(dotNetSpec v1alpha1.DotNet, pod corev1.Pod, index int, runt
 		return pod, fmt.Errorf("provided instrumentation.opentelemetry.io/dotnet-runtime annotation value '%s' is not supported", runtime)
 	}
 
-	// inject .NET instrumentation spec env vars with validation.
+	// inject .NET instrumentation spec env vars with validation
 	for _, env := range dotNetSpec.Env {
-		if shouldInjectEnvVar(container.Env, env.Name, env.Value) {
+		if shouldInjectEnvVar(allEnvs, env.Name, env.Value) {
 			container.Env = append(container.Env, env)
 		}
 	}
@@ -144,6 +142,7 @@ func injectDotNetSDK(dotNetSpec v1alpha1.DotNet, pod corev1.Pod, index int, runt
 			Image:     dotNetSpec.Image,
 			Command:   command,
 			Resources: dotNetSpec.Resources,
+			// SecurityContext: setInitContainerSecurityContext(pod),
 			VolumeMounts: []corev1.VolumeMount{{
 				Name:      dotnetVolumeName,
 				MountPath: dotnetInstrMountPath,

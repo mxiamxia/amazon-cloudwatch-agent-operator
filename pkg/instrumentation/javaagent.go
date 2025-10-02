@@ -23,8 +23,7 @@ var (
 	javaCommandWindows = []string{"CMD", "/c", "copy", "javaagent.jar", javaInstrMountPathWindows}
 )
 
-func injectJavaagent(javaSpec v1alpha1.Java, pod corev1.Pod, index int) (corev1.Pod, error) {
-	// caller checks if there is at least one container.
+func injectJavaagent(javaSpec v1alpha1.Java, pod corev1.Pod, index int, allEnvs []corev1.EnvVar) (corev1.Pod, error) {
 	container := &pod.Spec.Containers[index]
 
 	err := validateContainerEnv(container.Env, envJavaToolsOptions)
@@ -32,14 +31,14 @@ func injectJavaagent(javaSpec v1alpha1.Java, pod corev1.Pod, index int) (corev1.
 		return pod, err
 	}
 
-	// Check if ADOT SDK should be injected based on existing environment variables
-	if !shouldInjectADOTSDK(container.Env) {
+	// Check if ADOT SDK should be injected based on all environment variables and security context
+	if !shouldInjectADOTSDK(allEnvs, pod, container) {
 		return pod, nil
 	}
 
-	// inject Java instrumentation spec env vars with validation.
+	// inject Java instrumentation spec env vars with validation
 	for _, env := range javaSpec.Env {
-		if shouldInjectEnvVar(container.Env, env.Name, env.Value) {
+		if shouldInjectEnvVar(allEnvs, env.Name, env.Value) {
 			container.Env = append(container.Env, env)
 		}
 	}
@@ -79,6 +78,7 @@ func injectJavaagent(javaSpec v1alpha1.Java, pod corev1.Pod, index int) (corev1.
 			Image:     javaSpec.Image,
 			Command:   command,
 			Resources: javaSpec.Resources,
+			// SecurityContext: setInitContainerSecurityContext(pod),
 			VolumeMounts: []corev1.VolumeMount{{
 				Name:      javaVolumeName,
 				MountPath: javaInstrMountPath,

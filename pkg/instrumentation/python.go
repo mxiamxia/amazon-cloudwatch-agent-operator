@@ -24,8 +24,7 @@ const (
 	pythonInitContainerName            = initContainerName + "-python"
 )
 
-func injectPythonSDK(pythonSpec v1alpha1.Python, pod corev1.Pod, index int) (corev1.Pod, error) {
-	// caller checks if there is at least one container.
+func injectPythonSDK(pythonSpec v1alpha1.Python, pod corev1.Pod, index int, allEnvs []corev1.EnvVar) (corev1.Pod, error) {
 	container := &pod.Spec.Containers[index]
 
 	err := validateContainerEnv(container.Env, envPythonPath)
@@ -33,14 +32,14 @@ func injectPythonSDK(pythonSpec v1alpha1.Python, pod corev1.Pod, index int) (cor
 		return pod, err
 	}
 
-	// Check if ADOT SDK should be injected based on existing environment variables
-	if !shouldInjectADOTSDK(container.Env) {
+	// Check if ADOT SDK should be injected based on all environment variables and security context
+	if !shouldInjectADOTSDK(allEnvs, pod, container) {
 		return pod, nil
 	}
 
-	// inject Python instrumentation spec env vars with validation.
+	// inject Python instrumentation spec env vars with validation
 	for _, env := range pythonSpec.Env {
-		if shouldInjectEnvVar(container.Env, env.Name, env.Value) {
+		if shouldInjectEnvVar(allEnvs, env.Name, env.Value) {
 			container.Env = append(container.Env, env)
 		}
 	}
@@ -55,32 +54,32 @@ func injectPythonSDK(pythonSpec v1alpha1.Python, pod corev1.Pod, index int) (cor
 		container.Env[idx].Value = fmt.Sprintf("%s:%s:%s", pythonPathPrefix, container.Env[idx].Value, pythonPathSuffix)
 	}
 
-	// Set OTEL_TRACES_EXPORTER to otlp exporter if not set by user and validation allows.
-	if shouldInjectEnvVar(container.Env, envOtelTracesExporter, "otlp") {
+	// Set OTEL_TRACES_EXPORTER to otlp exporter if not set by user and validation allows
+	if shouldInjectEnvVar(allEnvs, envOtelTracesExporter, "otlp") {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  envOtelTracesExporter,
 			Value: "otlp",
 		})
 	}
 
-	// Set OTEL_EXPORTER_OTLP_TRACES_PROTOCOL to http/protobuf if not set by user and validation allows.
-	if shouldInjectEnvVar(container.Env, envOtelExporterOTLPTracesProtocol, "http/protobuf") {
+	// Set OTEL_EXPORTER_OTLP_TRACES_PROTOCOL to http/protobuf if not set by user and validation allows
+	if shouldInjectEnvVar(allEnvs, envOtelExporterOTLPTracesProtocol, "http/protobuf") {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  envOtelExporterOTLPTracesProtocol,
 			Value: "http/protobuf",
 		})
 	}
 
-	// Set OTEL_METRICS_EXPORTER to otlp exporter if not set by user and validation allows.
-	if shouldInjectEnvVar(container.Env, envOtelMetricsExporter, "otlp") {
+	// Set OTEL_METRICS_EXPORTER to otlp exporter if not set by user and validation allows
+	if shouldInjectEnvVar(allEnvs, envOtelMetricsExporter, "otlp") {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  envOtelMetricsExporter,
 			Value: "otlp",
 		})
 	}
 
-	// Set OTEL_EXPORTER_OTLP_METRICS_PROTOCOL to http/protobuf if not set by user and validation allows.
-	if shouldInjectEnvVar(container.Env, envOtelExporterOTLPMetricsProtocol, "http/protobuf") {
+	// Set OTEL_EXPORTER_OTLP_METRICS_PROTOCOL to http/protobuf if not set by user and validation allows
+	if shouldInjectEnvVar(allEnvs, envOtelExporterOTLPMetricsProtocol, "http/protobuf") {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  envOtelExporterOTLPMetricsProtocol,
 			Value: "http/protobuf",
@@ -107,6 +106,7 @@ func injectPythonSDK(pythonSpec v1alpha1.Python, pod corev1.Pod, index int) (cor
 			Image:     pythonSpec.Image,
 			Command:   []string{"cp", "-a", "/autoinstrumentation/.", pythonInstrMountPath},
 			Resources: pythonSpec.Resources,
+			// SecurityContext: setInitContainerSecurityContext(pod),
 			VolumeMounts: []corev1.VolumeMount{{
 				Name:      pythonVolumeName,
 				MountPath: pythonInstrMountPath,
