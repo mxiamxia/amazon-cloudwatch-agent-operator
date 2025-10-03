@@ -62,6 +62,17 @@ func configureAutoMonitor(ctx context.Context, autoMonitorConfigStr string, clie
 		return nil, fmt.Errorf("unable to unmarshal auto-monitor config: %w", err)
 	}
 
+	resources, err := clientSet.Discovery().ServerResourcesForGroupVersion("opentelemetry.io/v1alpha1")
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range resources.APIResources {
+		if r.Name == "instrumentations" {
+			setupLog.Info("W! Found OpenTelemetry setup in the cluster, skip auto monitor.")
+			return nil, nil
+		}
+	}
+
 	logger := ctrl.Log.WithName("auto_monitor")
 	return NewMonitor(ctx, *autoMonitorConfig, clientSet, client, reader, logger), nil
 }
