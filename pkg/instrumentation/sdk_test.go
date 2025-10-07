@@ -2085,3 +2085,80 @@ func TestChooseServiceName(t *testing.T) {
 		})
 	}
 }
+
+func TestSkipInjection(t *testing.T) {
+	tests := []struct {
+		name string
+		pod  corev1.Pod
+	}{
+		{
+			name: "Skip when otc-container is found",
+			pod: corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "project1",
+					Name:      "app",
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "application-name",
+							Image: "app:latest",
+						},
+						{
+							Name:  "otc-container",
+							Image: "otc-container:latest",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Skip if vendor collector image is found",
+			pod: corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "project1",
+					Name:      "app",
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "application-name",
+							Image: "app:latest",
+						},
+						{
+							Name:  "collector",
+							Image: "public.ecr.aws/aws-observability/aws-otel-collector:latest",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	inst := v1alpha1.Instrumentation{
+		Spec: v1alpha1.InstrumentationSpec{
+			Exporter: v1alpha1.Exporter{
+				Endpoint: "https://collector:4318",
+			},
+		},
+	}
+	insts := languageInstrumentations{
+		Sdk: instrumentationWithContainers{Instrumentation: &inst, Containers: ""},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inj := sdkInjector{
+				client: k8sClient,
+			}
+			pod := inj.inject(context.Background(), insts, corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: test.pod.Namespace}}, test.pod)
+			_, err = json.MarshalIndent(pod, "", "  ")
+			assert.NoError(t, err)
+			assert.Equal(t, test.pod.Spec.Containers[0],
+				corev1.Container{
+					Name:  "application-name",
+					Image: "app:latest",
+				})
+		})
+	}
+}

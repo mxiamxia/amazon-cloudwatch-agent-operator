@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/aws/amazon-cloudwatch-agent-operator/apis/v1alpha1"
+	"github.com/aws/amazon-cloudwatch-agent-operator/internal/naming"
 	"github.com/aws/amazon-cloudwatch-agent-operator/pkg/constants"
 )
 
@@ -32,6 +33,13 @@ const (
 	initContainerName = "opentelemetry-auto-instrumentation"
 	sideCarName       = "opentelemetry-auto-instrumentation"
 )
+
+var vendorCollectorImageMatcher = []string{
+	"opentelemetry-collector",
+	"otel-collector",
+	// *dot-collector
+	"dot-collector",
+}
 
 // inject a new sidecar container to the given pod, based on the given AmazonCloudWatchAgent.
 
@@ -42,6 +50,14 @@ type sdkInjector struct {
 
 func (i *sdkInjector) inject(ctx context.Context, insts languageInstrumentations, ns corev1.Namespace, pod corev1.Pod) corev1.Pod {
 	if len(pod.Spec.Containers) < 1 {
+		return pod
+	}
+
+	// Note: There is a potential edge case where injection might be skipped if CloudWatch Agent
+	// is already present as a sidecar. This is considered low risk since running CloudWatch Agent
+	// as a sidecar is not a officially supported configuration pattern within the operator.
+	if otcContainerExistsIn(pod) {
+		i.logger.V(3).Info("An otel collector container already exists, skipping injection")
 		return pod
 	}
 
@@ -241,6 +257,38 @@ func (i *sdkInjector) inject(ctx context.Context, insts languageInstrumentations
 	}
 
 	return pod
+}
+
+func otcContainerExistsIn(pod corev1.Pod) bool {
+	if len(pod.Spec.Containers)+len(pod.Spec.InitContainers) == 1 {
+		return false
+	}
+	for _, container := range pod.Spec.Containers {
+		if isOtcContainer(container) {
+			return true
+		}
+	}
+	// Check init container since k8s 1.28
+	for _, container := range pod.Spec.InitContainers {
+		if isOtcContainer(container) {
+			return true
+		}
+	}
+	return false
+}
+
+func isOtcContainer(container corev1.Container) bool {
+	// Check if there's auto-injected collector sidecar
+	if container.Name == naming.Container() {
+		return true
+	}
+	// Check if the container image matches the OTEL Collector naming pattern
+	for _, matcher := range vendorCollectorImageMatcher {
+		if strings.Contains(container.Image, matcher) {
+			return true
+		}
+	}
+	return false
 }
 
 func (i *sdkInjector) setInitContainerSecurityContext(pod corev1.Pod, securityContext *corev1.SecurityContext, instrInitContainerName string) corev1.Pod {
