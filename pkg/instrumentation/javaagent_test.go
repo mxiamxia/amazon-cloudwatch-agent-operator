@@ -172,7 +172,8 @@ func TestInjectJavaagent(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			pod, err := injectJavaagent(test.Java, test.pod, 0)
+			// Pass empty allEnvs for backward compatibility tests
+			pod, err := injectJavaagent(test.Java, test.pod, 0, []corev1.EnvVar{})
 			assert.Equal(t, test.expected, pod)
 			assert.Equal(t, test.err, err)
 		})
@@ -344,7 +345,8 @@ func TestInjectJavaagentWindows(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			pod, err := injectJavaagent(test.Java, test.pod, 0)
+			// Pass empty allEnvs for backward compatibility tests
+			pod, err := injectJavaagent(test.Java, test.pod, 0, []corev1.EnvVar{})
 			assert.Equal(t, test.expected, pod)
 			assert.Equal(t, test.err, err)
 		})

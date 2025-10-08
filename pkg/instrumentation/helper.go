@@ -23,7 +23,6 @@ const (
 	// CloudWatch agent service endpoints
 	cloudwatchAgentStandardEndpoint = "cloudwatch-agent.amazon-cloudwatch"
 	cloudwatchAgentWindowsEndpoint  = "cloudwatch-agent-windows-headless.amazon-cloudwatch.svc.cluster.local"
-	cloudwatchAgentPort             = "4316"
 )
 
 var defaultSize = resource.MustParse("200Mi")
@@ -175,14 +174,12 @@ func volumeSize(quantity *resource.Quantity) *resource.Quantity {
 	return quantity
 }
 
-// containsCloudWatchAgent checks if the endpoint contains CloudWatch agent service endpoints
+// containsCloudWatchAgent checks if the endpoint's hostname is a CloudWatch agent service endpoint
 func containsCloudWatchAgent(endpoint string) bool {
-	// Check for standard CloudWatch agent endpoint with port 4316
-	standardEndpoint := cloudwatchAgentStandardEndpoint + ":" + cloudwatchAgentPort
-	// Check for Windows headless service endpoint with port 4316
-	windowsEndpoint := cloudwatchAgentWindowsEndpoint + ":" + cloudwatchAgentPort
-
-	return strings.Contains(endpoint, standardEndpoint) || strings.Contains(endpoint, windowsEndpoint)
+	// Check if the CloudWatch agent endpoint appears after the protocol separator (://)
+	// This ensures we're matching the hostname, not a substring in the path
+	return strings.Contains(endpoint, "://"+cloudwatchAgentStandardEndpoint) ||
+		strings.Contains(endpoint, "://"+cloudwatchAgentWindowsEndpoint)
 }
 
 // getEnvValue returns the value of an environment variable from the container's env list
@@ -201,9 +198,14 @@ func isApplicationSignalsExplicitlyEnabled(envs []corev1.EnvVar) bool {
 	return strings.EqualFold(value, "true")
 }
 
-// resolveEnvFrom fetches ConfigMap/Secret data referenced by envFrom and returns as EnvVar slice
-// Uses caches to avoid redundant API calls when multiple containers reference the same ConfigMap/Secret
-func resolveEnvFrom(ctx context.Context, k8sClient client.Client, envFromSources []corev1.EnvFromSource, namespace string, logger logr.Logger, configMapCache map[string]*corev1.ConfigMap, secretCache map[string]*corev1.Secret) []corev1.EnvVar {
+func isApplicationSignalsExplicitlyDisabled(envs []corev1.EnvVar) bool {
+	value := getEnvValue(envs, "OTEL_AWS_APPLICATION_SIGNALS_ENABLED")
+	return strings.EqualFold(value, "false")
+}
+
+// resolveEnvFrom fetches ConfigMap data referenced by envFrom and returns as EnvVar slice
+// Uses caches to avoid redundant API calls when multiple containers reference the same ConfigMap
+func resolveEnvFrom(ctx context.Context, k8sClient client.Client, envFromSources []corev1.EnvFromSource, namespace string, logger logr.Logger, configMapCache map[string]*corev1.ConfigMap) []corev1.EnvVar {
 	var resolvedEnvs []corev1.EnvVar
 
 	for _, envFromSource := range envFromSources {
@@ -211,7 +213,7 @@ func resolveEnvFrom(ctx context.Context, k8sClient client.Client, envFromSources
 			cmName := envFromSource.ConfigMapRef.Name
 			var configMap *corev1.ConfigMap
 
-			// Check cache first
+			// Check cache first, only fetch ConfigMap once for all containers
 			if cached, exists := configMapCache[cmName]; exists {
 				configMap = cached
 				logger.V(1).Info("using cached ConfigMap from envFrom",
@@ -247,47 +249,6 @@ func resolveEnvFrom(ctx context.Context, k8sClient client.Client, envFromSources
 				})
 			}
 		}
-
-		if envFromSource.SecretRef != nil {
-			secretName := envFromSource.SecretRef.Name
-			var secret *corev1.Secret
-
-			// Check cache first
-			if cached, exists := secretCache[secretName]; exists {
-				secret = cached
-				logger.V(1).Info("using cached Secret from envFrom",
-					"secret", secretName,
-					"namespace", namespace)
-			} else {
-				// Fetch Secret
-				secret = &corev1.Secret{}
-				err := k8sClient.Get(ctx, client.ObjectKey{
-					Name:      secretName,
-					Namespace: namespace,
-				}, secret)
-
-				if err != nil {
-					logger.Error(err, "failed to fetch Secret for envFrom",
-						"secret", secretName,
-						"namespace", namespace)
-					continue
-				}
-
-				// Store in cache
-				secretCache[secretName] = secret
-				logger.V(1).Info("fetched and cached Secret from envFrom",
-					"secret", secretName,
-					"envCount", len(secret.Data))
-			}
-
-			// Convert Secret data to EnvVar slice
-			for key, value := range secret.Data {
-				resolvedEnvs = append(resolvedEnvs, corev1.EnvVar{
-					Name:  key,
-					Value: string(value),
-				})
-			}
-		}
 	}
 
 	return resolvedEnvs
@@ -295,13 +256,13 @@ func resolveEnvFrom(ctx context.Context, k8sClient client.Client, envFromSources
 
 // getAllEnvVars combines direct env vars and envFrom-resolved vars
 // Always processes both direct env and envFrom for consistency, using caches to optimize performance
-func getAllEnvVars(ctx context.Context, k8sClient client.Client, container *corev1.Container, namespace string, logger logr.Logger, configMapCache map[string]*corev1.ConfigMap, secretCache map[string]*corev1.Secret) []corev1.EnvVar {
+func getAllEnvVars(ctx context.Context, k8sClient client.Client, container *corev1.Container, namespace string, logger logr.Logger, configMapCache map[string]*corev1.ConfigMap) []corev1.EnvVar {
 	allEnvs := make([]corev1.EnvVar, len(container.Env))
 	copy(allEnvs, container.Env)
 
 	// Always resolve envFrom sources for consistency (even if empty)
 	if len(container.EnvFrom) > 0 {
-		resolvedEnvs := resolveEnvFrom(ctx, k8sClient, container.EnvFrom, namespace, logger, configMapCache, secretCache)
+		resolvedEnvs := resolveEnvFrom(ctx, k8sClient, container.EnvFrom, namespace, logger, configMapCache)
 
 		// envFrom has lower precedence than direct env
 		// Build map of existing env var names for O(1) lookup
@@ -316,11 +277,6 @@ func getAllEnvVars(ctx context.Context, k8sClient client.Client, container *core
 				allEnvs = append(allEnvs, resolvedEnv)
 			}
 		}
-
-		logger.V(1).Info("resolved all environment variables",
-			"directEnvCount", len(container.Env),
-			"envFromCount", len(resolvedEnvs),
-			"totalEnvCount", len(allEnvs))
 	}
 
 	return allEnvs
@@ -330,140 +286,86 @@ func getAllEnvVars(ctx context.Context, k8sClient client.Client, container *core
 // and the pod/container security context
 func shouldInjectADOTSDK(envs []corev1.EnvVar, pod corev1.Pod, container *corev1.Container) bool {
 	// Check Pod-level SecurityContext for runAsNonRoot without runAsUser
+	// Pod-level SecurityContext inherits to init containers, so we must check it first
+	podRunAsUser := int64(-1)
 	if pod.Spec.SecurityContext != nil {
 		podSC := pod.Spec.SecurityContext
+		if podSC.RunAsUser != nil {
+			podRunAsUser = *podSC.RunAsUser
+		}
 		if podSC.RunAsNonRoot != nil && *podSC.RunAsNonRoot && podSC.RunAsUser == nil {
-			// Pod requires non-root but doesn't specify UID - skip injection to avoid init container issues
+			// Pod requires non-root but doesn't specify UID - init container will fail
+			// Container-level runAsUser will NOT help because it doesn't inherit to init containers
 			return false
 		}
 	}
 
-	// Check Container-level SecurityContext for runAsNonRoot without runAsUser
+	// Check container-level SecurityContext for runAsNonRoot without runAsUser
+	// While container-level SecurityContext does not technically inherit to init containers,
+	// cluster policies or admission controllers may enforce security requirements across all containers
 	if container.SecurityContext != nil {
 		containerSC := container.SecurityContext
-		if containerSC.RunAsNonRoot != nil && *containerSC.RunAsNonRoot && containerSC.RunAsUser == nil {
-			// Container requires non-root but doesn't specify UID - skip injection to avoid init container issues
+		// Determine effective runAsUser for this container (container overrides pod)
+		effectiveRunAsUser := podRunAsUser
+		if containerSC.RunAsUser != nil {
+			effectiveRunAsUser = *containerSC.RunAsUser
+		}
+		// If container has runAsNonRoot without an effective runAsUser, skip injection
+		if containerSC.RunAsNonRoot != nil && *containerSC.RunAsNonRoot && effectiveRunAsUser == -1 {
 			return false
 		}
 	}
+
+	// If Application Signals is explicitly enabled, always inject regardless of endpoint configuration
+	if isApplicationSignalsExplicitlyEnabled(envs) {
+		return true
+	}
+
+	// If Application Signals is not explicitly enabled, check all OTLP endpoint configurations
+	// Skip injection if any endpoint is configured to a third-party (non-CloudWatch) endpoint
 
 	// Check OTEL_EXPORTER_OTLP_ENDPOINT
 	otlpEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_ENDPOINT")
 	if otlpEndpoint != "" && !containsCloudWatchAgent(otlpEndpoint) {
-		// If user has a custom OTLP endpoint, only inject if Application Signals is explicitly enabled
-		return isApplicationSignalsExplicitlyEnabled(envs)
+		return false
 	}
 
 	// Check OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
 	tracesEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
 	if tracesEndpoint != "" && !containsCloudWatchAgent(tracesEndpoint) {
-		// If user has a custom traces endpoint, only inject if Application Signals is explicitly enabled
-		return isApplicationSignalsExplicitlyEnabled(envs)
+		return false
+	}
+
+	// Check OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+	metricsEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+	if metricsEndpoint != "" && !containsCloudWatchAgent(metricsEndpoint) {
+		return false
+	}
+
+	// Check OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+	logsEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
+	if logsEndpoint != "" && !containsCloudWatchAgent(logsEndpoint) {
+		return false
 	}
 
 	// Default: inject if no custom endpoints are configured and no problematic security context
 	return true
 }
 
-// shouldDisableMetrics determines if metrics should be disabled (OTEL_METRICS_EXPORTER=none)
-func shouldDisableMetrics(envs []corev1.EnvVar) bool {
-	// Check if OTEL_EXPORTER_OTLP_ENDPOINT is set and doesn't contain cloudwatch-agent
-	otlpEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_ENDPOINT")
-	if otlpEndpoint != "" && !containsCloudWatchAgent(otlpEndpoint) {
-		// If Application Signals is explicitly enabled, don't disable metrics
-		if isApplicationSignalsExplicitlyEnabled(envs) {
-			return false
-		}
-	}
-
-	// Check if OTEL_EXPORTER_OTLP_METRICS_ENDPOINT is set
-	metricsEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
-	if metricsEndpoint != "" {
-		return false
-	}
-
-	// Default behavior is to disable metrics for Application Signals
-	return true
-}
-
-// shouldDisableLogs determines if logs should be disabled (OTEL_LOGS_EXPORTER=none)
-func shouldDisableLogs(envs []corev1.EnvVar) bool {
-	// Check if OTEL_EXPORTER_OTLP_ENDPOINT is set and doesn't contain cloudwatch-agent
-	otlpEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_ENDPOINT")
-	if otlpEndpoint != "" && !containsCloudWatchAgent(otlpEndpoint) {
-		// If Application Signals is explicitly enabled, don't disable logs
-		if isApplicationSignalsExplicitlyEnabled(envs) {
-			return false
-		}
-	}
-
-	// Check if OTEL_EXPORTER_OTLP_LOGS_ENDPOINT is set
-	logsEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
-	if logsEndpoint != "" {
-		return false
-	}
-
-	// Default behavior is to disable logs for Application Signals
-	return true
-}
-
-// shouldOverrideTracesEndpoint determines if the traces endpoint should be overridden
-func shouldOverrideTracesEndpoint(envs []corev1.EnvVar) bool {
-	// Check if OTEL_EXPORTER_OTLP_ENDPOINT is set and doesn't contain cloudwatch-agent
-	otlpEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_ENDPOINT")
-	if otlpEndpoint != "" && !containsCloudWatchAgent(otlpEndpoint) {
-		// If Application Signals is explicitly enabled, don't override traces endpoint
-		if isApplicationSignalsExplicitlyEnabled(envs) {
-			return false
-		}
-	}
-
-	// Check if OTEL_EXPORTER_OTLP_TRACES_ENDPOINT is already set
-	tracesEndpoint := getEnvValue(envs, "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
-	if tracesEndpoint != "" {
-		return false
-	}
-
-	// Default behavior is to override traces endpoint for Application Signals
-	return true
-}
-
 // shouldInjectEnvVar determines whether a specific environment variable should be injected
 // based on its name and the existing environment variables in the container
-func shouldInjectEnvVar(envs []corev1.EnvVar, envName, envValue string) bool {
-	// If the environment variable is already set, don't override it
+func shouldInjectEnvVar(envs []corev1.EnvVar, envName string) bool {
+	// If the environment variable is already set by user, don't override it
 	if getEnvValue(envs, envName) != "" {
 		return false
 	}
 
-	// Apply specific validation rules based on the environment variable name
-	switch envName {
-	case "OTEL_METRICS_EXPORTER":
-		if envValue == "none" {
-			return shouldDisableMetrics(envs)
-		}
-	case "OTEL_LOGS_EXPORTER":
-		if envValue == "none" {
-			return shouldDisableLogs(envs)
-		}
-	case "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT":
-		return shouldOverrideTracesEndpoint(envs)
-	case "OTEL_TRACES_SAMPLER":
-		return shouldOverrideTracesEndpoint(envs)
-	case "OTEL_TRACES_SAMPLER_ARG":
-		return shouldOverrideTracesEndpoint(envs)
-	case "OTEL_TRACES_EXPORTER":
-		// Only set to "none" if no custom traces endpoint is configured
-		return getEnvValue(envs, "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") == ""
-
-	// For all other OTEL_ environment variables, apply general validation
-	default:
-		if strings.HasPrefix(envName, "OTEL_") {
-			// Don't override any explicitly set OTEL_ environment variables
-			return getEnvValue(envs, envName) == ""
-		}
+	// If Application Signals is explicitly disabled, skip all OTEL_ configuration overrides
+	// This allows users to configure their own OTel settings when not using Application Signals
+	if isApplicationSignalsExplicitlyDisabled(envs) && strings.HasPrefix(envName, "OTEL_") {
+		return false
 	}
 
-	// For non-OTEL environment variables, always inject if not already set
+	// Inject if not already set
 	return true
 }

@@ -4,6 +4,8 @@
 package instrumentation
 
 import (
+	"fmt"
+
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/aws/amazon-cloudwatch-agent-operator/apis/v1alpha1"
@@ -27,12 +29,12 @@ func injectNodeJSSDK(nodeJSSpec v1alpha1.NodeJS, pod corev1.Pod, index int, allE
 
 	// Check if ADOT SDK should be injected based on all environment variables and security context
 	if !shouldInjectADOTSDK(allEnvs, pod, container) {
-		return pod, nil
+		return pod, fmt.Errorf("ADOT NodeJs SDK injection skipped due to incompatible OTel configuration")
 	}
 
 	// inject NodeJS instrumentation spec env vars with validation
 	for _, env := range nodeJSSpec.Env {
-		if shouldInjectEnvVar(allEnvs, env.Name, env.Value) {
+		if shouldInjectEnvVar(allEnvs, env.Name) {
 			container.Env = append(container.Env, env)
 		}
 	}
@@ -67,7 +69,6 @@ func injectNodeJSSDK(nodeJSSpec v1alpha1.NodeJS, pod corev1.Pod, index int, allE
 			Image:     nodeJSSpec.Image,
 			Command:   []string{"cp", "-a", "/autoinstrumentation/.", nodejsInstrMountPath},
 			Resources: nodeJSSpec.Resources,
-			// SecurityContext: setInitContainerSecurityContext(pod),
 			VolumeMounts: []corev1.VolumeMount{{
 				Name:      nodejsVolumeName,
 				MountPath: nodejsInstrMountPath,

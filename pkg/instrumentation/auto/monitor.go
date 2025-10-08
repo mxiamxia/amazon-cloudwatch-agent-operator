@@ -26,12 +26,15 @@ import (
 	"github.com/aws/amazon-cloudwatch-agent-operator/pkg/instrumentation"
 )
 
+// List of namespaces excluded from AppSignals auto-monitoring by default (best-effort basis).
+// Customers must explicitly opt in to enable AppSignals for workloads in these namespaces.
 var excludedNamespaces = []string{
 	// --- Monitoring & Observability ---
 	"monitoring",                    // Prometheus, kube-prometheus-stack, Grafana
 	"loki",                          // Loki, Promtail
 	"observability",                 // Tempo, Jaeger
 	"opentelemetry-operator-system", // OpenTelemetry Collector / Operator
+	"amazon-cloudwatch",             // Amazon CloudWatch Agent
 	"tracing",                       // Zipkin or similar tracing tools
 
 	// --- Ingress & Networking ---

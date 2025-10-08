@@ -16,8 +16,6 @@ IMG_PREFIX ?= aws
 IMG_REPO ?= cloudwatch-agent-operator
 IMG ?= ${IMG_PREFIX}/${IMG_REPO}:${VERSION}
 ARCH ?= $(shell go env GOARCH)
-# Target architecture for container builds (defaults to amd64 for Kubernetes compatibility)
-TARGET_ARCH ?= amd64
 
 TARGET_ALLOCATOR_IMG_REPO ?= target-allocator
 TARGET_ALLOCATOR_IMG ?= ${IMG_PREFIX}/${TARGET_ALLOCATOR_IMG_REPO}:${TARGET_ALLOCATOR_VERSION}
@@ -165,25 +163,9 @@ generate: controller-gen api-docs
 
 # Build the container image, used only for local dev purposes
 # buildx is used to ensure same results for arm based systems (m1/2 chips)
-# Uses TARGET_ARCH which defaults to amd64 for Kubernetes compatibility
 .PHONY: container
 container:
-	docker buildx build --load --platform linux/${TARGET_ARCH} -t ${IMG} --build-arg VERSION_PKG=${VERSION_PKG} --build-arg VERSION=${VERSION} --build-arg VERSION_DATE=${VERSION_DATE} --build-arg AGENT_VERSION=${AGENT_VERSION} --build-arg AUTO_INSTRUMENTATION_JAVA_VERSION=${AUTO_INSTRUMENTATION_JAVA_VERSION} --build-arg AUTO_INSTRUMENTATION_PYTHON_VERSION=${AUTO_INSTRUMENTATION_PYTHON_VERSION} --build-arg AUTO_INSTRUMENTATION_DOTNET_VERSION=${AUTO_INSTRUMENTATION_DOTNET_VERSION} --build-arg AUTO_INSTRUMENTATION_NODEJS_VERSION=${AUTO_INSTRUMENTATION_NODEJS_VERSION} --build-arg DCGM_EXPORTER_VERSION=${DCGM_EXPORTER_VERSION} --build-arg NEURON_MONITOR_VERSION=${NEURON_MONITOR_VERSION} --build-arg TARGET_ALLOCATOR_VERSION=${TARGET_ALLOCATOR_VERSION} .
-
-# Build container image for AMD64 architecture (for x86 Kubernetes clusters)
-.PHONY: container-amd64
-container-amd64:
-	TARGET_ARCH=amd64 $(MAKE) container
-
-# Build container image for ARM64 architecture (for ARM Kubernetes clusters)
-.PHONY: container-arm64
-container-arm64:
-	TARGET_ARCH=arm64 $(MAKE) container
-
-# Build container image for the current host architecture
-.PHONY: container-native
-container-native:
-	TARGET_ARCH=${ARCH} $(MAKE) container
+	docker buildx build --load --platform linux/${ARCH} -t ${IMG} --build-arg VERSION_PKG=${VERSION_PKG} --build-arg VERSION=${VERSION} --build-arg VERSION_DATE=${VERSION_DATE} --build-arg AGENT_VERSION=${AGENT_VERSION} --build-arg AUTO_INSTRUMENTATION_JAVA_VERSION=${AUTO_INSTRUMENTATION_JAVA_VERSION} --build-arg AUTO_INSTRUMENTATION_PYTHON_VERSION=${AUTO_INSTRUMENTATION_PYTHON_VERSION} --build-arg AUTO_INSTRUMENTATION_DOTNET_VERSION=${AUTO_INSTRUMENTATION_DOTNET_VERSION} --build-arg AUTO_INSTRUMENTATION_NODEJS_VERSION=${AUTO_INSTRUMENTATION_NODEJS_VERSION} --build-arg DCGM_EXPORTER_VERSION=${DCGM_EXPORTER_VERSION} --build-arg NEURON_MONITOR_VERSION=${NEURON_MONITOR_VERSION} --build-arg TARGET_ALLOCATOR_VERSION=${TARGET_ALLOCATOR_VERSION} .
 
 # Push the container image, used only for local dev purposes
 .PHONY: container-push
@@ -197,7 +179,7 @@ container-target-allocator-push:
 .PHONY: container-target-allocator
 container-target-allocator: GOOS = linux
 container-target-allocator: targetallocator
-	docker buildx build --load --platform linux/${TARGET_ARCH} -t ${TARGET_ALLOCATOR_IMG}  cmd/amazon-cloudwatch-agent-target-allocator
+	docker buildx build --load --platform linux/${ARCH} -t ${TARGET_ALLOCATOR_IMG}  cmd/amazon-cloudwatch-agent-target-allocator
 
 .PHONY: ta-build-and-push
 ta-build-and-push: container-target-allocator

@@ -61,16 +61,15 @@ func (i *sdkInjector) inject(ctx context.Context, insts languageInstrumentations
 		return pod
 	}
 
-	// Pre-resolve all ConfigMaps/Secrets from envFrom for all containers
-	// Uses caches to avoid redundant API calls when multiple containers reference the same ConfigMap/Secret
+	// Pre-resolve all ConfigMaps from envFrom for all containers
+	// Uses caches to avoid redundant API calls when multiple containers reference the same ConfigMap
 	configMapCache := make(map[string]*corev1.ConfigMap)
-	secretCache := make(map[string]*corev1.Secret)
 	containerEnvCache := make(map[int][]corev1.EnvVar)
 
 	for idx := range pod.Spec.Containers {
 		container := &pod.Spec.Containers[idx]
 		// Always call getAllEnvVars for consistency, regardless of envFrom presence
-		allEnvs := getAllEnvVars(ctx, i.client, container, pod.Namespace, i.logger, configMapCache, secretCache)
+		allEnvs := getAllEnvVars(ctx, i.client, container, pod.Namespace, i.logger, configMapCache)
 		containerEnvCache[idx] = allEnvs
 		i.logger.V(1).Info("cached resolved environment variables for container",
 			"containerIndex", idx,
