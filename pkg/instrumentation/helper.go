@@ -179,7 +179,7 @@ func containsCloudWatchAgent(endpoint string) bool {
 	// Check if the CloudWatch agent endpoint appears after the protocol separator (://)
 	// This ensures we're matching the hostname, not a substring in the path
 	return strings.Contains(endpoint, "://"+cloudwatchAgentStandardEndpoint) ||
-	       strings.Contains(endpoint, "://"+cloudwatchAgentWindowsEndpoint)
+		strings.Contains(endpoint, "://"+cloudwatchAgentWindowsEndpoint)
 }
 
 // getEnvValue returns the value of an environment variable from the container's env list
@@ -203,9 +203,9 @@ func isApplicationSignalsExplicitlyDisabled(envs []corev1.EnvVar) bool {
 	return strings.EqualFold(value, "false")
 }
 
-// resolveEnvFrom fetches ConfigMap/Secret data referenced by envFrom and returns as EnvVar slice
-// Uses caches to avoid redundant API calls when multiple containers reference the same ConfigMap/Secret
-func resolveEnvFrom(ctx context.Context, k8sClient client.Client, envFromSources []corev1.EnvFromSource, namespace string, logger logr.Logger, configMapCache map[string]*corev1.ConfigMap, secretCache map[string]*corev1.Secret) []corev1.EnvVar {
+// resolveEnvFrom fetches ConfigMap data referenced by envFrom and returns as EnvVar slice
+// Uses caches to avoid redundant API calls when multiple containers reference the same ConfigMap
+func resolveEnvFrom(ctx context.Context, k8sClient client.Client, envFromSources []corev1.EnvFromSource, namespace string, logger logr.Logger, configMapCache map[string]*corev1.ConfigMap) []corev1.EnvVar {
 	var resolvedEnvs []corev1.EnvVar
 
 	for _, envFromSource := range envFromSources {
@@ -213,7 +213,7 @@ func resolveEnvFrom(ctx context.Context, k8sClient client.Client, envFromSources
 			cmName := envFromSource.ConfigMapRef.Name
 			var configMap *corev1.ConfigMap
 
-			// Check cache first
+			// Check cache first, only fetch ConfigMap once for all containers
 			if cached, exists := configMapCache[cmName]; exists {
 				configMap = cached
 				logger.V(1).Info("using cached ConfigMap from envFrom",
@@ -249,47 +249,6 @@ func resolveEnvFrom(ctx context.Context, k8sClient client.Client, envFromSources
 				})
 			}
 		}
-
-		if envFromSource.SecretRef != nil {
-			secretName := envFromSource.SecretRef.Name
-			var secret *corev1.Secret
-
-			// Check cache first
-			if cached, exists := secretCache[secretName]; exists {
-				secret = cached
-				logger.V(1).Info("using cached Secret from envFrom",
-					"secret", secretName,
-					"namespace", namespace)
-			} else {
-				// Fetch Secret
-				secret = &corev1.Secret{}
-				err := k8sClient.Get(ctx, client.ObjectKey{
-					Name:      secretName,
-					Namespace: namespace,
-				}, secret)
-
-				if err != nil {
-					logger.Error(err, "failed to fetch Secret for envFrom",
-						"secret", secretName,
-						"namespace", namespace)
-					continue
-				}
-
-				// Store in cache
-				secretCache[secretName] = secret
-				logger.V(1).Info("fetched and cached Secret from envFrom",
-					"secret", secretName,
-					"envCount", len(secret.Data))
-			}
-
-			// Convert Secret data to EnvVar slice
-			for key, value := range secret.Data {
-				resolvedEnvs = append(resolvedEnvs, corev1.EnvVar{
-					Name:  key,
-					Value: string(value),
-				})
-			}
-		}
 	}
 
 	return resolvedEnvs
@@ -297,13 +256,13 @@ func resolveEnvFrom(ctx context.Context, k8sClient client.Client, envFromSources
 
 // getAllEnvVars combines direct env vars and envFrom-resolved vars
 // Always processes both direct env and envFrom for consistency, using caches to optimize performance
-func getAllEnvVars(ctx context.Context, k8sClient client.Client, container *corev1.Container, namespace string, logger logr.Logger, configMapCache map[string]*corev1.ConfigMap, secretCache map[string]*corev1.Secret) []corev1.EnvVar {
+func getAllEnvVars(ctx context.Context, k8sClient client.Client, container *corev1.Container, namespace string, logger logr.Logger, configMapCache map[string]*corev1.ConfigMap) []corev1.EnvVar {
 	allEnvs := make([]corev1.EnvVar, len(container.Env))
 	copy(allEnvs, container.Env)
 
 	// Always resolve envFrom sources for consistency (even if empty)
 	if len(container.EnvFrom) > 0 {
-		resolvedEnvs := resolveEnvFrom(ctx, k8sClient, container.EnvFrom, namespace, logger, configMapCache, secretCache)
+		resolvedEnvs := resolveEnvFrom(ctx, k8sClient, container.EnvFrom, namespace, logger, configMapCache)
 
 		// envFrom has lower precedence than direct env
 		// Build map of existing env var names for O(1) lookup
@@ -318,11 +277,6 @@ func getAllEnvVars(ctx context.Context, k8sClient client.Client, container *core
 				allEnvs = append(allEnvs, resolvedEnv)
 			}
 		}
-
-		logger.V(1).Info("resolved all environment variables",
-			"directEnvCount", len(container.Env),
-			"envFromCount", len(resolvedEnvs),
-			"totalEnvCount", len(allEnvs))
 	}
 
 	return allEnvs
