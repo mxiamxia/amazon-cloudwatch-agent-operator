@@ -64,7 +64,7 @@ func injectDotNetSDK(dotNetSpec v1alpha1.DotNet, pod corev1.Pod, index int, runt
 
 	// Check if ADOT SDK should be injected based on all environment variables and security context
 	if !shouldInjectADOTSDK(allEnvs, pod, container) {
-		return pod, nil
+		return pod, fmt.Errorf("ADOT DOTNET SDK injection skipped due to incompatible OTel configuration")
 	}
 
 	// check if OTEL_DOTNET_AUTO_HOME env var is already set
@@ -91,7 +91,7 @@ func injectDotNetSDK(dotNetSpec v1alpha1.DotNet, pod corev1.Pod, index int, runt
 
 	// inject .NET instrumentation spec env vars with validation
 	for _, env := range dotNetSpec.Env {
-		if shouldInjectEnvVar(allEnvs, env.Name, env.Value) {
+		if shouldInjectEnvVar(allEnvs, env.Name) {
 			container.Env = append(container.Env, env)
 		}
 	}
@@ -142,7 +142,6 @@ func injectDotNetSDK(dotNetSpec v1alpha1.DotNet, pod corev1.Pod, index int, runt
 			Image:     dotNetSpec.Image,
 			Command:   command,
 			Resources: dotNetSpec.Resources,
-			// SecurityContext: setInitContainerSecurityContext(pod),
 			VolumeMounts: []corev1.VolumeMount{{
 				Name:      dotnetVolumeName,
 				MountPath: dotnetInstrMountPath,

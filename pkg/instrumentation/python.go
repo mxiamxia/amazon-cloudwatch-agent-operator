@@ -34,12 +34,12 @@ func injectPythonSDK(pythonSpec v1alpha1.Python, pod corev1.Pod, index int, allE
 
 	// Check if ADOT SDK should be injected based on all environment variables and security context
 	if !shouldInjectADOTSDK(allEnvs, pod, container) {
-		return pod, nil
+		return pod, fmt.Errorf("ADOT Python SDK injection skipped due to incompatible OTel configuration")
 	}
 
 	// inject Python instrumentation spec env vars with validation
 	for _, env := range pythonSpec.Env {
-		if shouldInjectEnvVar(allEnvs, env.Name, env.Value) {
+		if shouldInjectEnvVar(allEnvs, env.Name) {
 			container.Env = append(container.Env, env)
 		}
 	}
@@ -55,7 +55,7 @@ func injectPythonSDK(pythonSpec v1alpha1.Python, pod corev1.Pod, index int, allE
 	}
 
 	// Set OTEL_TRACES_EXPORTER to otlp exporter if not set by user and validation allows
-	if shouldInjectEnvVar(allEnvs, envOtelTracesExporter, "otlp") {
+	if shouldInjectEnvVar(allEnvs, envOtelTracesExporter) {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  envOtelTracesExporter,
 			Value: "otlp",
@@ -63,7 +63,7 @@ func injectPythonSDK(pythonSpec v1alpha1.Python, pod corev1.Pod, index int, allE
 	}
 
 	// Set OTEL_EXPORTER_OTLP_TRACES_PROTOCOL to http/protobuf if not set by user and validation allows
-	if shouldInjectEnvVar(allEnvs, envOtelExporterOTLPTracesProtocol, "http/protobuf") {
+	if shouldInjectEnvVar(allEnvs, envOtelExporterOTLPTracesProtocol) {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  envOtelExporterOTLPTracesProtocol,
 			Value: "http/protobuf",
@@ -71,7 +71,7 @@ func injectPythonSDK(pythonSpec v1alpha1.Python, pod corev1.Pod, index int, allE
 	}
 
 	// Set OTEL_METRICS_EXPORTER to otlp exporter if not set by user and validation allows
-	if shouldInjectEnvVar(allEnvs, envOtelMetricsExporter, "otlp") {
+	if shouldInjectEnvVar(allEnvs, envOtelMetricsExporter) {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  envOtelMetricsExporter,
 			Value: "otlp",
@@ -79,7 +79,7 @@ func injectPythonSDK(pythonSpec v1alpha1.Python, pod corev1.Pod, index int, allE
 	}
 
 	// Set OTEL_EXPORTER_OTLP_METRICS_PROTOCOL to http/protobuf if not set by user and validation allows
-	if shouldInjectEnvVar(allEnvs, envOtelExporterOTLPMetricsProtocol, "http/protobuf") {
+	if shouldInjectEnvVar(allEnvs, envOtelExporterOTLPMetricsProtocol) {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  envOtelExporterOTLPMetricsProtocol,
 			Value: "http/protobuf",
@@ -106,7 +106,6 @@ func injectPythonSDK(pythonSpec v1alpha1.Python, pod corev1.Pod, index int, allE
 			Image:     pythonSpec.Image,
 			Command:   []string{"cp", "-a", "/autoinstrumentation/.", pythonInstrMountPath},
 			Resources: pythonSpec.Resources,
-			// SecurityContext: setInitContainerSecurityContext(pod),
 			VolumeMounts: []corev1.VolumeMount{{
 				Name:      pythonVolumeName,
 				MountPath: pythonInstrMountPath,

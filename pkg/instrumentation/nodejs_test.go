@@ -172,7 +172,8 @@ func TestInjectNodeJSSDK(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			pod, err := injectNodeJSSDK(test.NodeJS, test.pod, 0)
+			// Pass empty allEnvs for backward compatibility tests
+			pod, err := injectNodeJSSDK(test.NodeJS, test.pod, 0, []corev1.EnvVar{})
 			assert.Equal(t, test.expected, pod)
 			assert.Equal(t, test.err, err)
 		})
